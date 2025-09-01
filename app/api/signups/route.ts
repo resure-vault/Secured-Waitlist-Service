@@ -49,10 +49,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Too many requests from domain" }, { status: 429 })
     }
 
-    if (!(await spamDetector.checkDomainHealth(domain))) {
-      return NextResponse.json({ error: "Invalid email domain" }, { status: 400 })
-    }
-
     const existing = await pool.query(
       'SELECT 1 FROM waitlist_emails WHERE email = $1',
       [email]

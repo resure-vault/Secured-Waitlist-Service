@@ -1,9 +1,6 @@
-import { kv } from '@vercel/kv'
-import validator from 'validator'
-import { promisify } from 'util'
-import { resolveMx } from 'dns'
+import { Redis } from '@upstash/redis'
 
-const resolveMxAsync = promisify(resolveMx)
+const redis = Redis.fromEnv()
 
 export class SpamDetector {
   private readonly patterns = [
@@ -15,7 +12,7 @@ export class SpamDetector {
     /^(test|demo|fake|spam|temp|example)\d*@/i,
     /^\w{1,3}@\w{1,3}\.(com|net|org)$/i,
     /^[a-z]*\d{5,}@/i,
-    /^[a-z]+@[a-z]*\d+\.(tk|ml|ga|cf)$/i
+    /([a-z])\1{4,}/i
   ]
 
   private readonly disposableDomains = new Set([
@@ -25,19 +22,14 @@ export class SpamDetector {
     'mailnesia.com', 'trashmail.com', 'temporary-mail.net'
   ])
 
-  private readonly suspiciousTlds = new Set([
-    'tk', 'ml', 'ga', 'cf', 'link', 'click', 'download', 'zip'
-  ])
-
   async isSpam(email: string): Promise<boolean> {
     const normalized = email.toLowerCase().trim()
     
-    if (!validator.isEmail(normalized)) return true
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return true
     if (this.patterns.some(pattern => pattern.test(normalized))) return true
     
     const domain = normalized.split('@')[1]
     if (this.disposableDomains.has(domain)) return true
-    if (this.suspiciousTlds.has(domain.split('.').pop()!)) return true
     if (this.hasObviousSpamStructure(normalized)) return true
     
     return false
@@ -57,29 +49,14 @@ export class SpamDetector {
     return false
   }
 
-  async checkDomainHealth(domain: string): Promise<boolean> {
-    try {
-      const cached = await kv.get(`domain:${domain}`)
-      if (cached !== null) return cached as boolean
-      
-      const records = await resolveMxAsync(domain)
-      const isHealthy = records && records.length > 0
-      
-      await kv.setex(`domain:${domain}`, 3600, isHealthy)
-      return isHealthy
-    } catch {
-      return false
-    }
-  }
-
   async markSuspiciousDomain(domain: string): Promise<void> {
     const key = `suspicious_domain:${domain}`
-    const count = await kv.get(key) as number || 0
-    await kv.setex(key, 86400, count + 1)
+    const count = await redis.get(key) as number || 0
+    await redis.setex(key, 86400, count + 1)
   }
 
   async isDomainSuspicious(domain: string): Promise<boolean> {
-    const count = await kv.get(`suspicious_domain:${domain}`) as number || 0
+    const count = await redis.get(`suspicious_domain:${domain}`) as number || 0
     return count >= 3
   }
 }
